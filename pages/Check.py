@@ -1,69 +1,92 @@
 import streamlit as st
 import qrcode
+from qrcode.image.styledpil import StyledPilImage
+from qrcode.image.styles.moduledrawers.pil import RoundedModuleDrawer
+from qrcode.image.styles.colormasks import SolidFillColorMask
 from PIL import Image, ImageDraw, ImageFont
 import io
 
-st.title("QR-code generator met optioneel kader en 'Scan me' tekst")
+st.title("QR-code generator met 'Scan Me' optie")
 
-# Invoer van de gebruiker
-url = st.text_input("Voer een verplichte web link in")
-image_file = st.file_uploader("Upload optioneel een afbeelding", type=["png", "jpg", "jpeg"])
-add_border = st.checkbox("Kader rond QR-code")
-add_text = st.checkbox("Voeg 'Scan me' tekst toe")
+# Input velden
+url = st.text_input("Voer de weblink in (verplicht)")
+uploaded_logo = st.file_uploader("Optioneel: upload een afbeelding (logo) voor in het midden van de QR-code", type=["png", "jpg", "jpeg"])
+add_scan_me = st.checkbox("Voeg 'Scan Me' toe met kader", value=False)
 
-if url:
-    # QR-code genereren
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=10,
-        border=4
-    )
-    qr.add_data(url)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
+if st.button("Genereer QR-code"):
+    if not url:
+        st.error("⚠️ Vul eerst een weblink in.")
+    else:
+        # QR-code maken
+        qr = qrcode.QRCode(
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(url)
+        qr.make(fit=True)
 
-    # Optioneel afbeelding toevoegen
-    if image_file:
-        logo = Image.open(image_file)
-        qr_width, qr_height = qr_img.size
-        logo_size = qr_width // 4
-        logo = logo.resize((logo_size, logo_size))
-        pos = ((qr_width - logo_size) // 2, (qr_height - logo_size) // 2)
-        qr_img.paste(logo, pos, mask=logo if logo.mode == "RGBA" else None)
+        qr_img = qr.make_image(
+            image_factory=StyledPilImage,
+            module_drawer=RoundedModuleDrawer(),
+            color_mask=SolidFillColorMask(back_color="white", front_color="black")
+        ).convert("RGBA")
 
-    # Kader toevoegen
-    if add_border:
-        border_size = 20
-        new_size = (qr_img.width + border_size * 2, qr_img.height + border_size * 2)
-        bordered_img = Image.new("RGB", new_size, "black")
-        bordered_img.paste(qr_img, (border_size, border_size))
-        qr_img = bordered_img
+        # Logo in QR plaatsen
+        if uploaded_logo:
+            logo = Image.open(uploaded_logo).convert("RGBA")
+            logo_size = int(qr_img.size[0] * 0.2)
+            logo = logo.resize((logo_size, logo_size))
+            pos = ((qr_img.size[0] - logo_size) // 2, (qr_img.size[1] - logo_size) // 2)
+            qr_img.paste(logo, pos, mask=logo)
 
-    # 'Scan me' tekst toevoegen
-    if add_text:
-        draw = ImageDraw.Draw(qr_img)
-        try:
-            font = ImageFont.truetype("arial.ttf", 40)
-        except:
+        # Als "Scan Me" is aangevinkt
+        if add_scan_me:
+            # Extra canvas maken
+            padding = 40
+            label_height = 50
+            new_width = qr_img.size[0] + padding * 2
+            new_height = qr_img.size[1] + padding * 2 + label_height
+            new_img = Image.new("RGBA", (new_width, new_height), "white")
+            draw = ImageDraw.Draw(new_img)
+
+            # QR op nieuwe canvas
+            new_img.paste(qr_img, (padding, padding))
+
+            # Kader tekenen
+            line_width = 5
+            draw.rounded_rectangle(
+                [(padding - 10, padding - 10), (new_width - padding + 10, new_height - padding - label_height + 10)],
+                radius=20,
+                outline="black",
+                width=line_width
+            )
+
+            # "Scan Me" label tekenen
             font = ImageFont.load_default()
+            text = "SCAN ME"
+            text_bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            label_width = text_width + 40
+            label_height_real = text_height + 20
+            label_x1 = (new_width - label_width) // 2
+            label_y1 = new_height - label_height_real - 10
+            label_x2 = label_x1 + label_width
+            label_y2 = label_y1 + label_height_real
 
-        text = "Scan me"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
+            draw.rounded_rectangle([label_x1, label_y1, label_x2, label_y2], radius=15, outline="black", width=2)
+            draw.text(
+                ((new_width - text_width) // 2, label_y1 + (label_height_real - text_height) // 2),
+                text, fill="black", font=font
+            )
 
-        x = (qr_img.width - text_width) // 2
-        y = qr_img.height - text_height - 10
-        draw.text((x, y), text, font=font, fill="black")
+            qr_img = new_img
 
-    # QR-code weergeven
-    st.image(qr_img)
+        # QR tonen
+        st.image(qr_img)
 
-    # Downloadknop
-    buf = io.BytesIO()
-    qr_img.save(buf, format="PNG")
-    buf.seek(0)
-    st.download_button("Download QR-code", data=buf, file_name="qr_code.png", mime="image/png")
-else:
-    st.warning("Gelieve een web link in te vullen.")
+        # Download knop
+        buf = io.BytesIO()
+        qr_img.save(buf, format="PNG")
+        st.download_button("Download QR-code", buf.getvalue(), "qrcode.png", "image/png")
