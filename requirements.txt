@@ -3,5 +3,4 @@ pandas
 openpyxl
 qrcode
 requests
-re
-bs4
+beautifulsoup4
