@@ -2,88 +2,94 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import re
+from datetime import datetime
 
-def extract_matches_from_text(text):
-    # Deze functie parseert de tekst in het formaat zoals in de afbeelding
-    matches = []
-    current_date = None
-    
-    # Split de tekst in regels en verwerk elke regel
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line:
-            continue
-            
-        # Check voor datum/tijd regel (bijv. "VRUDAG 01 AUGUSTUS - 20:30")
-        date_match = re.match(r'^([A-Z]+)\s(\d{1,2})\s([A-Z]+)\s-\s(\d{1,2}:\d{2})', line)
-        if date_match:
-            current_date = f"{date_match.group(1)} {date_match.group(2)} {date_match.group(3)} - {date_match.group(4)}"
-            continue
-            
-        # Check voor wedstrijdregel (bijv. "5 KVCDT BORSEEKE DAMES A    3 - 2    SV ZULTE-WAREGEM EWII")
-        match_match = re.match(r'^(.+?)\s+(\d+\s*-\s*\d+)\s+(.+)$', line)
-        if match_match and current_date:
-            home_team = match_match.group(1).strip()
-            away_team = match_match.group(3).strip()
-            matches.append({
-                'Datum': current_date,
-                'Thuisploeg': home_team,
-                'Uitploeg': away_team
-            })
-            
-    return matches
-
-def scrape_website(url):
+def scrape_rbfa_matches(url):
     try:
-        response = requests.get(url)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         
-        soup = BeautifulSoup(response.text, 'html.parser')
-        visible_text = soup.get_text()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        matches = []
         
-        matches = extract_matches_from_text(visible_text)
+        # Zoek alle wedstrijd containers
+        match_containers = soup.find_all('div', class_='match-row')
         
-        if matches:
-            return pd.DataFrame(matches)
-        else:
-            st.warning("Geen wedstrijden gevonden in de opgegeven website.")
+        if not match_containers:
+            st.warning("Geen wedstrijd containers gevonden. Mogelijk is de HTML-structuur gewijzigd.")
             return None
-            
+        
+        for container in match_containers:
+            try:
+                # Extract datum en tijd
+                date_time = container.find('div', class_='match-date').get_text(strip=True)
+                
+                # Extract teams
+                home_team = container.find('div', class_='team-home').get_text(strip=True)
+                away_team = container.find('div', class_='team-away').get_text(strip=True)
+                
+                # Extract score (indien beschikbaar)
+                score = container.find('div', class_='match-score').get_text(strip=True) if container.find('div', class_='match-score') else 'Nog niet gespeeld'
+                
+                matches.append({
+                    'Datum': date_time,
+                    'Thuisploeg': home_team,
+                    'Uitploeg': away_team,
+                    'Uitslag': score
+                })
+                
+            except Exception as e:
+                st.warning(f"Fout bij verwerken van een wedstrijd: {e}")
+                continue
+                
+        return pd.DataFrame(matches)
+        
     except Exception as e:
         st.error(f"Fout bij het scrapen van de website: {e}")
         return None
 
 # Streamlit UI
-st.title("Voetbalwedstrijden Scraper")
+st.title("RBFa Voetbalwedstrijden Scraper")
 
-url = st.text_input("Voer de website URL in:", "")
+default_url = "https://www.rbfa.be/nl/club/1931/ploeg/346664/kalender"
+url = st.text_input("Voer de RBFa kalender URL in:", default_url)
 
 if st.button("Scrape wedstrijden"):
     if url:
         st.info(f"Bezig met scrapen van: {url}")
-        df = scrape_website(url)
+        with st.spinner('Wedstrijden aan het ophalen...'):
+            df = scrape_rbfa_matches(url)
         
-        if df is not None:
+        if df is not None and not df.empty:
             st.success(f"{len(df)} wedstrijden gevonden!")
+            
+            # Datum opmaak verbeteren
+            df['Datum'] = pd.to_datetime(df['Datum'], errors='coerce').dt.strftime('%A %d %B %Y - %H:%M')
+            
             st.dataframe(df)
             
-            # Optioneel: download knop
-            csv = df.to_csv(index=False).encode('utf-8')
+            # Download knop
+            csv = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
             st.download_button(
                 label="Download als CSV",
                 data=csv,
-                file_name='voetbalwedstrijden.csv',
+                file_name='rbfa_wedstrijden.csv',
                 mime='text/csv'
             )
+        else:
+            st.warning("Geen wedstrijden gevonden. Controleer de URL of probeer het later opnieuw.")
     else:
         st.warning("Voer een geldige URL in")
 
 st.markdown("""
 **Instructies:**
-1. Voer de URL in van een website met voetbalwedstrijden
+1. De standaard URL is al ingevuld (SV Zulte-Waregem Dames)
 2. Klik op "Scrape wedstrijden"
-3. De app zal proberen wedstrijden te extraheren in tabelvorm
+3. De app toont de gevonden wedstrijden in een tabel
 
-**Opmerking:** De app werkt het beste met websites die een vergelijkbaar formaat hebben als de voorbeeldafbeelding.
+**Let op:** Websites veranderen soms hun structuur, waardoor de scraper mogelijk moet worden aangepast.
 """)
