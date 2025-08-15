@@ -4,3 +4,4 @@ openpyxl
 qrcode
 requests
 re
+bs4
